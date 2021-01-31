@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Bubble</title>
+    <style>
+        .myVideo {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 2px solid green;
+        }
+
+        #VidWrapper {
+            display: flex;
+            flex-direction: column;
+            align-content: center;
+        }
+
+        #vidMsg {
+            margin: 5px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="meter" width="500" height="50"></canvas>
+
+    <div id="VidWrapper">
+        <span id="vidMsg"></span>
+        <video class="myVideo" id="video" playsinline autoplay></video>
+    </div>
+
+
+</body>
+<script>
+
+    var video = document.querySelector("#video");
+
+    var wrapper = document.querySelector("#VidWrapper");
+
+    var dragging = false;
+
+
+    wrapper.addEventListener('mousedown', function () {
+        dragging = true;
+    })
+
+    wrapper.addEventListener('mouseup', function (e) {
+        if (!dragging) return;
+        dragging = false;
+    });
+
+    wrapper.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+
+        let top = e.pageY - (this.offsetHeight / 2);
+        let left = e.pageX - (this.offsetWidth / 2);
+        top = (top > 0) ? top : 0;
+        left = (left > 0) ? left : 0;
+        this.style.top = top + 'px';
+        this.style.left = left + 'px',
+            this.style.position = 'absolute'
+
+    });
+
+    // Basic settings for the video to get from Webcam  
+    const constraints = {
+        audio: false,
+        video: {
+            width: 120, height: 120
+        }
+    };
+
+    // This condition will ask permission to user for Webcam access  
+    if (navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia(constraints)
+            .then(function (stream) {
+                video.srcObject = stream;
+            })
+            .catch(function (err0r) {
+                console.log("Something went wrong!");
+            });
+    }
+
+    var audioContext = null;
+    var meter = null;
+    var canvasContext = null;
+    var WIDTH = 500;
+    var HEIGHT = 50;
+    var rafID = null;
+
+    window.onload = function () {
+
+        // grab our canvas
+        canvasContext = document.getElementById("meter").getContext("2d");
+
+        // monkeypatch Web Audio
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+
+        // grab an audio context
+        audioContext = new AudioContext();
+
+        // Attempt to get audio input
+        try {
+            // monkeypatch getUserMedia
+            navigator.getUserMedia =
+                navigator.getUserMedia ||
+                navigator.webkitGetUserMedia ||
+                navigator.mediaDevices.getUserMedia ||
+                navigator.mozGetUserMedia;
+
+            // ask for an audio input
+            navigator.getUserMedia(
+                {
+                    "audio": {
+                        "mandatory": {
+                            "googEchoCancellation": "false",
+                            "googAutoGainControl": "false",
+                            "googNoiseSuppression": "false",
+                            "googHighpassFilter": "false"
+                        },
+                        "optional": []
+                    },
+                }, onMicrophoneGranted, onMicrophoneDenied);
+        } catch (e) {
+            alert('getUserMedia threw exception :' + e);
+        }
+
+    }
+
+    function onMicrophoneDenied() {
+        alert('Stream generation failed.');
+    }
+
+    var mediaStreamSource = null;
+
+    function createAudioMeter(audioContext, clipLevel, averaging, clipLag) {
+        var processor = audioContext.createScriptProcessor(512);
+        processor.onaudioprocess = volumeAudioProcess;
+        processor.clipping = false;
+        processor.lastClip = 0;
+        processor.volume = 0;
+        processor.clipLevel = clipLevel || 0.98;
+        processor.averaging = averaging || 0.95;
+        processor.clipLag = clipLag || 750;
+
+        // this will have no effect, since we don't copy the input to the output,
+        // but works around a current Chrome bug.
+        processor.connect(audioContext.destination);
+
+        processor.checkClipping =
+            function () {
+                if (!this.clipping)
+                    return false;
+                if ((this.lastClip + this.clipLag) < window.performance.now())
+                    this.clipping = false;
+                return this.clipping;
+            };
+
+        processor.shutdown =
+            function () {
+                this.disconnect();
+                this.onaudioprocess = null;
+            };
+
+        return processor;
+    }
+
+    function volumeAudioProcess(event) {
+        var buf = event.inputBuffer.getChannelData(0);
+        var bufLength = buf.length;
+        var sum = 0;
+        var x;
+
+        // Do a root-mean-square on the samples: sum up the squares...
+        for (var i = 0; i < bufLength; i++) {
+            x = buf[i];
+            if (Math.abs(x) >= this.clipLevel) {
+                this.clipping = true;
+                this.lastClip = window.performance.now();
+            }
+            sum += x * x;
+        }
+
+        // ... then take the square root of the sum.
+        var rms = Math.sqrt(sum / bufLength);
+
+        // Now smooth this out with the averaging factor applied
+        // to the previous sample - take the max here because we
+        // want "fast attack, slow release."
+        this.volume = Math.max(rms, this.volume * this.averaging);
+    }
+
+    function onMicrophoneGranted(stream) {
+
+        audioContext = new AudioContext();
+        // Create an AudioNode from the stream.
+        console.log("Mic Access Granted")
+        mediaStreamSource = audioContext.createMediaStreamSource(stream);
+
+        // Create a new volume meter and connect it.
+        meter = createAudioMeter(audioContext);
+        mediaStreamSource.connect(meter);
+
+        // kick off the visual updating
+        onLevelChange();
+    }
+
+    function onLevelChange(time) {
+        let noise = meter.volume * 1000;
+        console.log(noise)
+        let vidStyle = "2px solid green";
+        let vidMsg = "Looking Cute";
+        if (noise > 10) {
+            vidStyle = "2px solid red";
+            vidMsg = "Conversation or background noise";
+        }
+        document.getElementById("video").style.border = vidStyle;
+        document.getElementById("vidMsg").innerText = vidMsg;
+
+        // set up the next visual callback
+        rafID = window.requestAnimationFrame(onLevelChange);
+    }
+</script>
+</script>
+
+</html>
